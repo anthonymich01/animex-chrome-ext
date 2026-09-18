@@ -1,0 +1,38 @@
+/*
+ * The player lives in a cross-origin iframe.  Native fullscreen is restored
+ * by content.js when possible; this is a visual fallback for browsers that
+ * reject an automatic requestFullscreen() call after an episode navigation.
+ */
+html[data-animex-qol-fullscreen],
+html[data-animex-qol-fullscreen] body {
+  overflow: hidden !important;
+  pointer-events: auto !important;
+}
+
+html[data-animex-qol-fullscreen] #watch-player-region {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 2147483647 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  max-width: none !important;
+  max-height: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+  background: #000 !important;
+  pointer-events: auto !important;
+}
+
+html[data-animex-qol-fullscreen] #watch-player-region > div,
+html[data-animex-qol-fullscreen] #watch-player-region iframe {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  max-height: none !important;
+}
+
+html[data-animex-qol-fullscreen] #watch-player-region iframe {
+  display: block !important;
+  border: 0 !important;
+}

@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "AnimeX Playback QoL",
+  "version": "1.0.0",
+  "description": "Keeps AnimeX playback volume and fullscreen state when moving between episodes.",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://animex.one/*",
+        "https://www.animex.one/*",
+        "https://plyr.animex.one/*"
+      ],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ]
+}
