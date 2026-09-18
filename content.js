@@ -210,8 +210,8 @@
       try {
         await request.call(target);
       } catch {
-        // Some Chrome versions require a user gesture here. The host page's
-        // CSS fallback still keeps the player visually fullscreen.
+        // Some Chrome versions require a user gesture here. The host page and
+        // extension window fallbacks keep playback fullscreen in that case.
       } finally {
         restoreInFlight = false;
       }
@@ -436,7 +436,8 @@
     }
 
     if (restoreNeeded) {
-      // Let the host apply its fallback immediately, then try the native API.
+      // Let the host apply its fullscreen state immediately, then try native
+      // fullscreen in the new player document.
       reportFullscreen(true, true);
       scheduleNativeFullscreenRestore();
     }
@@ -450,6 +451,10 @@
       frameSrc: '',
       ignoreFalseUntil: 0,
       navigationTimer: null,
+      nativeRequestInFlight: false,
+      hostNativeFullscreen: false,
+      suppressNativeExit: false,
+      windowFullscreenRequested: null,
       observedFrames: new WeakSet()
     };
 
@@ -476,6 +481,120 @@
       document.documentElement.toggleAttribute('data-animex-qol-fullscreen', state.active);
     }
 
+    function getDocumentFullscreenElement() {
+      return document.fullscreenElement || document.webkitFullscreenElement || null;
+    }
+
+    function getHostFullscreenTarget() {
+      return document.querySelector('#watch-player-region');
+    }
+
+    function isHostNativeFullscreen() {
+      const target = getHostFullscreenTarget();
+      return target !== null && getDocumentFullscreenElement() === target;
+    }
+
+    function sendWindowFullscreenCommand(active) {
+      if (state.windowFullscreenRequested === active) return;
+      state.windowFullscreenRequested = active;
+
+      const runtime = typeof chrome !== 'undefined' ? chrome.runtime : null;
+      if (!runtime || typeof runtime.sendMessage !== 'function') {
+        state.windowFullscreenRequested = null;
+        return;
+      }
+
+      try {
+        runtime.sendMessage(
+          { source: MESSAGE_SOURCE, type: 'window-fullscreen', active },
+          (response) => {
+            const failed = Boolean(runtime.lastError) || (
+              active && (!response || response.active !== true)
+            );
+
+            if (!failed || !active || !state.active || state.windowFullscreenRequested !== active) {
+              return;
+            }
+
+            // The service worker can be starting up while the iframe is being
+            // restored. Retry once it is available instead of falling back to
+            // the browser viewport forever.
+            state.windowFullscreenRequested = null;
+            window.setTimeout(() => {
+              if (state.active && state.windowFullscreenRequested === null) {
+                sendWindowFullscreenCommand(true);
+              }
+            }, 1000);
+          }
+        );
+      } catch {
+        state.windowFullscreenRequested = null;
+      }
+    }
+
+    function exitHostNativeFullscreen() {
+      const element = getDocumentFullscreenElement();
+      if (!state.hostNativeFullscreen && !element) return;
+
+      state.hostNativeFullscreen = false;
+      const exit = document.exitFullscreen || document.webkitExitFullscreen;
+      if (typeof exit !== 'function' || !element) return;
+
+      state.suppressNativeExit = true;
+      try {
+        Promise.resolve(exit.call(document))
+          .catch(() => {})
+          .finally(() => {
+            state.suppressNativeExit = false;
+          });
+      } catch {
+        state.suppressNativeExit = false;
+      }
+    }
+
+    async function requestHostNativeFullscreen() {
+      if (!state.active || state.nativeRequestInFlight || isHostNativeFullscreen()) return;
+
+      const target = getHostFullscreenTarget();
+      if (!target) return;
+
+      const request = target.requestFullscreen || target.webkitRequestFullscreen;
+      if (typeof request !== 'function') return;
+
+      state.nativeRequestInFlight = true;
+      try {
+        await request.call(target);
+      } catch {
+        // A request made after an iframe navigation may not have a transient
+        // user gesture. The extension window fullscreen command is the
+        // browser-wide fallback for that case.
+      } finally {
+        state.nativeRequestInFlight = false;
+      }
+
+      if (state.active && getDocumentFullscreenElement() === target) {
+        state.hostNativeFullscreen = true;
+      }
+    }
+
+    function handleHostFullscreenChange() {
+      const element = getDocumentFullscreenElement();
+      const target = getHostFullscreenTarget();
+
+      if (target && element === target) {
+        state.hostNativeFullscreen = true;
+        return;
+      }
+
+      if (state.hostNativeFullscreen && !state.suppressNativeExit) {
+        // Keep the preference while an iframe or its host player region is
+        // being replaced. An actual browser-window exit is reported by the
+        // service worker; the player's own exit button is handled by the
+        // player content script.
+        state.hostNativeFullscreen = false;
+      }
+    }
+
     function setHostFullscreen(active, persist = true) {
       if (active && !isWatchPage()) return;
 
@@ -485,6 +604,18 @@
         setItem(window.sessionStorage, HOST_FULLSCREEN_KEY, active ? '1' : '0');
       }
       applyHostFullscreenAttribute();
+
+      if (active) {
+        // Try the web API first while any user activation is still available.
+        void requestHostNativeFullscreen();
+        // chrome.windows.update() is not subject to requestFullscreen's
+        // transient-user-activation rule, so it can hide the browser chrome
+        // again after the player iframe navigates.
+        sendWindowFullscreenCommand(true);
+      } else {
+        sendWindowFullscreenCommand(false);
+        exitHostNativeFullscreen();
+      }
 
       // A restore message can cause the player to report its state back. Only
       // send it when the host state changed; otherwise the two content scripts
@@ -517,6 +648,7 @@
       frame.addEventListener('load', () => {
         sendRestoreMessage(frame);
         applyHostFullscreenAttribute();
+        if (state.active) void requestHostNativeFullscreen();
       });
     }
 
@@ -540,6 +672,7 @@
         state.frameSrc = src;
         watchFrame(frame);
         sendRestoreMessage(frame);
+        if (state.active) void requestHostNativeFullscreen();
       }
 
       applyHostFullscreenAttribute();
@@ -601,6 +734,20 @@
       }
     }
 
+    function handleWindowFullscreenMessage(message) {
+      if (
+        !message ||
+        message.source !== MESSAGE_SOURCE ||
+        message.type !== 'window-fullscreen-state' ||
+        message.active !== false
+      ) {
+        return;
+      }
+
+      state.windowFullscreenRequested = null;
+      if (state.active) setHostFullscreen(false);
+    }
+
     function syncRoute() {
       const watch = isWatchPage();
       if (!watch) {
@@ -615,11 +762,13 @@
     }
 
     document.addEventListener('DOMContentLoaded', syncRoute, { once: true });
+    document.addEventListener('fullscreenchange', handleHostFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleHostFullscreenChange);
     document.addEventListener('keydown', (event) => {
       if (
         event.key === 'Escape' &&
         state.active &&
-        !document.fullscreenElement &&
+        (state.hostNativeFullscreen || !getDocumentFullscreenElement()) &&
         Date.now() >= state.ignoreFalseUntil
       ) {
         setHostFullscreen(false);
@@ -628,9 +777,17 @@
     window.addEventListener('message', handleMessage);
     window.addEventListener('popstate', syncRoute);
 
+    if (typeof chrome !== 'undefined' && chrome.runtime) {
+      chrome.runtime.onMessage.addListener(handleWindowFullscreenMessage);
+    }
+
     // AnimeX is an SPA, so the next episode can change the URL and iframe src
     // without re-running this content script.
     window.setInterval(syncRoute, 250);
     syncFrame();
+    if (state.active) {
+      sendWindowFullscreenCommand(true);
+      void requestHostNativeFullscreen();
+    }
   }
 })();

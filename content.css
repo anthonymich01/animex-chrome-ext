@@ -1,7 +1,7 @@
 /*
- * The player lives in a cross-origin iframe.  Native fullscreen is restored
- * by content.js when possible; this is a visual fallback for browsers that
- * reject an automatic requestFullscreen() call after an episode navigation.
+ * The player lives in a cross-origin iframe.  content.js asks the extension
+ * service worker to put the Chrome window itself in fullscreen, while these
+ * rules keep the player stretched to the viewport during that transition.
  */
 html[data-animex-qol-fullscreen],
 html[data-animex-qol-fullscreen] body {
@@ -9,7 +9,8 @@ html[data-animex-qol-fullscreen] body {
   pointer-events: auto !important;
 }
 
-html[data-animex-qol-fullscreen] #watch-player-region {
+html[data-animex-qol-fullscreen] #watch-player-region,
+html[data-animex-qol-fullscreen] #watch-player-region:fullscreen {
   position: fixed !important;
   inset: 0 !important;
   z-index: 2147483647 !important;

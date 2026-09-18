@@ -3,6 +3,10 @@
   "name": "AnimeX Playback QoL",
   "version": "1.0.0",
   "description": "Keeps AnimeX playback volume and fullscreen state when moving between episodes.",
+  "permissions": ["storage"],
+  "background": {
+    "service_worker": "background.js"
+  },
   "content_scripts": [
     {
       "matches": [
